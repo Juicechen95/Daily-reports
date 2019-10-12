@@ -1,3 +1,11 @@
+    x_ = tf.placeholder(tf.int32, shape=[None, opt.maxlen], name='x_')
+    x_mask_ = tf.placeholder(tf.float32, shape=[None, opt.maxlen], name='x_mask_')
+    keep_prob = tf.placeholder(tf.float32, name='keep_prob')
+    y_ = tf.placeholder(tf.float32, shape=[None, opt.num_class], name='y_')
+    class_penalty_ = tf.placeholder(tf.float32, shape=(), name='class_penalty_')
+    accuracy_, loss_, train_op, W_norm_, global_step, update_label, x0v, x0a, xya, x1v, x1a, x2a, x3a, x4a, x0, x1, x2, x3, x4, feature, kernels, correct, predicts, prob = unified_classifier(
+        x_, x_mask_, y_, keep_prob, opt,
+        class_penalty_)
 def unified_classifier(x, x_mask, y, dropout, opt, class_penalty):
     #  comment notation
     #  b: batch size, s: sequence length, e: embedding dim, c : num of class
