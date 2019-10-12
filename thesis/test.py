@@ -1,3 +1,134 @@
+
+
+def parse_args(argv):
+	parser = ArgumentParser("DeepSensor",
+					formatter_class=ArgumentDefaultsHelpFormatter,
+					conflict_handler='resolve')
+	## optimizer config
+	parser.add_argument('-lr', action='store', dest="lr", default=1e-3, type=float,
+						help="learning rate. 1e-4(default)")
+	parser.add_argument('-d', '--dataset', action='store', dest="dataset", default='web',
+						help="amazon_full/yahoo/yelp_full/dbpedia/agnews/web(default)")
+	parser.add_argument('-i', '--intra_att', action='store', dest="intra_att", default='cos',
+						help="intra-attention type: share/mul/w/cos(default)")
+	parser.add_argument('-c', '--co_att', action='store', dest="co_att", default='cos',
+						help="co-attention type: share/mul/w/cos(default)")
+	parser.add_argument('-p', '--pooling', action='store', dest="pool", default='mean',
+						help="attention pooling type: max/mean(default)")
+	parser.add_argument('-n', '--ngram', action='store', dest="ngram", default="25,55,75",
+						help="ngram hyper-parameter: 25,55(default)")
+	parser.add_argument('-a', '--alpha', action='store', dest="alpha", default=1.0, type=float,
+						help="class penalty ratio: 1.0(default)")
+	parser.add_argument('-inter', action='store', dest="inter_alpha", default=0.0, type=float,
+						help="inter-class penalty ratio: 0.0(default)")
+	parser.add_argument('-intra', action='store', dest="intra_alpha", default=0.0, type=float,
+						help="intra-class penalty ratio: 0.0(default)")
+	parser.add_argument('-w', action='store', dest="wordlabel_ratio", default=0, type=float,
+						help="update ratio for label embedding with mean of sequence representation: 0(default)")
+	parser.add_argument('-e', action='store', dest="max_epoch", default=1, type=int,
+						help="max epoch: 5(default)")
+	parser.add_argument('-k', action='store', dest="kernel", default=4, type=int,
+						help="output number of each kernels: 4(default)")
+	parser.add_argument('-att_nonlinear', action='store', dest="att_nonlinear", default=False, type=bool,
+						help="attention matrix with nonlinear function(tanh): True/False(default)")
+	parser.add_argument('-model', action='store', dest="model", default="134",
+						help="select model: 0(default). 0:self attention[x], 1:self attention[x,xy], 2:intra-co-attention[xy], 3:intra-attention[xx], 4:LEAM")
+	parser.add_argument('-feature', action='store', dest="feature_aggr", default="sum",
+						help="feature aggregation method: sum(default)/self/mlp")
+	parser.add_argument('-multi_leam', action='store', dest="multi_leam", default=True, type=bool,
+						help="Multi-gram leam (no conv): False/True(default)")
+	parser.add_argument('-leam_ngram', action='store', dest="leam_ngram", default=55, type=int,
+						help="N-gram conv in leam: 55(default)")
+	parser.add_argument('-ensemble', action='store', dest="ensemble", default=True, type=bool,
+						help="Instead of using feature vector aggregation, the model use 3 different classifier and sum up the three loss.")
+	parser.add_argument('-save_feature', action='store', dest="save_feature", default=False, type=bool,
+						help="Save attention scores and features: False(default)/True")
+	parser.add_argument('-save_path', action='store', dest="save_path", default='./Model/', type=str,
+					help="The path of the saver")
+	parser.add_argument('-tfrc_path_tr', action='store', dest="tfrc_path_tr", default='/workspace/web/data/web_1_train/tfrecord', type=str,
+					help="The path of the saver")
+	parser.add_argument('-tfrc_path_val', action='store', dest="tfrc_path_val", default='/workspace/web/data/web_1_val/tfrecord', type=str,
+					help="The path of the saver")
+	parser.add_argument('-batchsize',  dest="batchsize", default=2, type=int)
+
+	#### textnet
+	parser.add_argument('-t_loadpath', action='store', dest="t_loadpath", default="./text_data/web_gambling_10.p", type=str,
+					help="The path of the saver")
+	parser.add_argument('-t_embpath', action='store', dest="t_embpath", default="./text_data/web_gambling_emb_10.p", type=str,
+					help="The path of the saver")
+	parser.add_argument('-t_train_data_path', action='store', dest='t_train_data_path', default="./text_data/web_train_data.p", type=str,
+					help="The path of the saver")
+	return parser.parse_args()
+
+
+class Options(object):
+	def __init__(self,args):
+		self.GPUID = 0
+		self.dataset = 'agnews'
+		self.fix_emb = False
+		self.restore = False
+		self.W_emb = None
+		self.W_class_emb = None
+		self.maxlen = 305
+		self.n_words = None
+		self.embed_size = 300
+		self.lr = 1e-4
+		self.max_epochs = 5
+		self.dropout = 0.5
+		self.part_data = False
+		self.portion = 1
+		self.save_path = "./save/"
+		self.log_path = "./log/"
+		self.valid_freq = 5
+		self.batch_size = 2
+		self.optimizer = 'Adam'
+		self.clip_grad = None
+		self.class_penalty = 1.0
+		self.H_dis = 300
+		self.num_none = 3
+		self.num_att = 4
+		self.latent_size = 300
+		self.att_type = 'w'  # cos/w
+		self.co_att_type_xy = 'cos'  # cos/w
+		self.att_none_linear = False
+		self.att_pooling = 'max_conv'
+		self.ngram = 55
+		self.model = '1234'
+		self.kernels = 4
+		self.att_w = tf.get_variable('att_w', [self.embed_size, self.embed_size])
+		self.inter_class_penalty = 1.0
+		self.intra_class_penalty = 1.0
+		self.wordlabel_ratio = 0
+		self.multigram_leam=False
+		self.feature_aggr='sum'
+		self.leam_ngram = 55
+		self.ensemble = True
+		self.save_feature = True
+		self.save_size = 1000
+
+		d = args.__dict__
+		self.lr = d['lr']
+		self.dataset = d['dataset']
+		self.att_type = d['intra_att']
+		self.co_att_type_xy = d['co_att']
+		self.att_pooling = d['pool']
+		self.class_penalty = d['alpha']
+		self.att_none_linear = d['att_nonlinear']
+		self.model = d['model']
+		#self.max_epochs = d['max_epoch']
+		self.ngram = [int(i) for i in d['ngram'].split(',')]
+		self.kernels = d['kernel']
+		self.inter_class_penalty = d['inter_alpha']
+		self.intra_class_penalty = d['intra_alpha']
+		self.wordlabel_ratio = d['wordlabel_ratio']
+		self.feature_aggr = d['feature_aggr']
+		self.multigram_leam = d['multi_leam']
+		self.leam_ngram = d['leam_ngram']
+		self.ensemble = d['ensemble']
+		self.save_feature = d['save_feature']
+        
+    opt = Options(args)
+    
     x_ = tf.placeholder(tf.int32, shape=[None, opt.maxlen], name='x_')
     x_mask_ = tf.placeholder(tf.float32, shape=[None, opt.maxlen], name='x_mask_')
     keep_prob = tf.placeholder(tf.float32, name='keep_prob')
