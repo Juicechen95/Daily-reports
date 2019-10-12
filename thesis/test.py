@@ -1,5 +1,149 @@
 
 
+def self_att(x, x_mask, opt, prefix=None):  # x: b * s * e
+    x_mask = tf.expand_dims(x_mask, axis=-1)  # b * s * 1
+    x_norm = tf.multiply(x, x_mask)  # b * s * e
+    v = tf.get_variable(prefix+'Self_att_V', [opt.embed_size, 1])  # e * 1
+    print('icanseeyou.', x_norm.get_shape(), v.get_shape())
+    A = tf.einsum('bsl,ln->bsn', x_norm, v)  # b * s * 1
+    att = partial_softmax_v2(A, x_mask, 1, prefix+'Self_att_softmax')  # b * s * 1
+    x_final = tf.reduce_sum(tf.multiply(x, att), 1)
+    return x_final, v, tf.squeeze(att)
+
+
+def self_co_att_pooling_mask(x, x_mask, opt, name):
+    x_mask = tf.expand_dims(x_mask, axis=-1)  # b * s * 1
+    x_co_att = tf.multiply(x, x_mask)  # b * s * e
+    if opt.att_type == 'cos':
+        x_norm = tf.nn.l2_normalize(x_co_att, dim=2)  # b * s * e
+        x_norm_tran = tf.transpose(x_norm, [0, 2, 1])  # b * e * s
+        A = tf.einsum('bse,bek->bsk', x_norm, x_norm_tran)  # b * s * s
+    elif opt.att_type == 'w':
+        W = tf.get_variable(name + 'self_co_att_pooling_mask_w', [opt.embed_size, opt.embed_size])
+        x_co_att_tran = tf.transpose(x_co_att, [0, 2, 1])  # b * e * s
+        A = tf.einsum('bse,el,blm->bsm', x_co_att, W, x_co_att_tran)  # b * s * s
+    elif opt.att_type == 'share':
+        W = opt.att_w
+        x_co_att_tran = tf.transpose(x_co_att, [0, 2, 1])  # b * e * s
+        A = tf.einsum('bse,el,blm->bsm', x_co_att, W, x_co_att_tran)  # b * s * s
+    elif opt.att_type == 'mul':
+        x_tran = tf.transpose(x_co_att, [0, 2, 1])
+        A = tf.einsum('bse,bek->bsk', x_co_att, x_tran)  # b * s * s
+    else:
+        raise ValueError("Unsupported attention method=%s" % opt.att_type)
+
+
+    if opt.att_none_linear:
+        A = tf.nn.tanh(A)
+
+    if opt.att_pooling == 'mean':
+        A_pool = tf.reduce_mean(A, axis=-1, keep_dims=True)  # b * s * 1
+    elif opt.att_pooling == 'max':
+        A_pool = tf.reduce_max(A, axis=-1, keep_dims=True)
+    #elif opt.att_pooling == 'max_conv':
+        #Att_v = tf.contrib.layers.conv1d(A, num_outputs=opt.kernels, kernel_size=[opt.ngram], padding='SAME',
+        #                                 activation_fn=tf.nn.relu)  # b * s * s
+        #A_pool = tf.reduce_max(Att_v, axis=-1, keep_dims=True)
+    else:
+        raise ValueError("Unsupported attention pooling method=%s" % opt.att_pooling)
+
+    att = partial_softmax_v2(A_pool, x_mask, 1, name+'self_co_att_pooling_softmax')
+    x_self_mean = tf.reduce_sum(tf.multiply(x_co_att, att), 1)  # b * e
+
+    return x_self_mean
+
+
+def self_co_att_pooling_mask_multigram(x, x_mask, opt, name):
+    x_mask = tf.expand_dims(x_mask, -1)
+    x_self_multigram = []
+    att_scores = []
+    for x_co_att in x:
+        if opt.att_type == 'cos':
+            x_norm = tf.nn.l2_normalize(x_co_att, dim=2)  # b * s * e
+            x_norm_tran = tf.transpose(x_norm, [0, 2, 1])  # b * e * s
+            A = tf.einsum('bse,bek->bsk', x_norm, x_norm_tran)  # b * s * s
+        elif opt.att_type == 'w':
+            W = tf.get_variable(name + 'self_co_att_pooling_mask_w', [opt.embed_size, opt.embed_size])
+            x_co_att_tran = tf.transpose(x_co_att, [0, 2, 1])  # b * e * s
+            A = tf.einsum('bse,el,blm->bsm', x_co_att, W, x_co_att_tran)  # b * s * s
+        elif opt.att_type == 'share':
+            W = opt.att_w
+            x_co_att_tran = tf.transpose(x_co_att, [0, 2, 1])  # b * e * s
+            A = tf.einsum('bse,el,blm->bsm', x_co_att, W, x_co_att_tran)  # b * s * s
+        elif opt.att_type == 'mul':
+            x_tran = tf.transpose(x_co_att, [0, 2, 1])
+            A = tf.einsum('bse,bek->bsk', x_co_att, x_tran)  # b * s * s
+        else:
+            raise ValueError("Unsupported attention method=%s" % opt.att_type)
+
+        if opt.att_none_linear:
+            A = tf.nn.tanh(A)
+
+        if opt.att_pooling == 'mean':
+            A_pool = tf.reduce_mean(A, axis=-1, keep_dims=True)  # b * s * 1
+        elif opt.att_pooling == 'max':
+            A_pool = tf.reduce_max(A, axis=-1, keep_dims=True)
+        #elif opt.att_pooling == 'max_conv':
+        #    Att_v = tf.contrib.layers.conv1d(A, num_outputs=opt.kernels, kernel_size=[opt.ngram], padding='SAME',
+        #                                     activation_fn=tf.nn.relu)  # b * s * s
+        #    A_pool = tf.reduce_max(Att_v, axis=-1, keep_dims=True)
+        else:
+            raise ValueError("Unsupported attention pooling method=%s" % opt.att_pooling)
+
+        att = partial_softmax_v2(A_pool, x_mask, 1, name + 'self_co_att_pooling_softmax')
+        x_self_mean = tf.reduce_sum(tf.multiply(x_co_att, att), 1)  # b * e
+
+        x_self_multigram.append(x_self_mean)
+        att_scores.append(tf.squeeze(att))
+
+    return tf.reduce_mean(tf.stack(x_self_multigram), 0), att_scores
+
+
+def co_att_xy_multigram(x, x_mask, y, opt):
+    x_co_att_multigram = []
+    x_co_att_score = []
+    for x_co_att in x:
+        print('icanseeindex', x.index(x_co_att))
+        if opt.co_att_type_xy == 'w':
+            W = tf.get_variable("co_att_w", [opt.embed_size, opt.embed_size])
+            y_tran = tf.transpose(y, [1, 0])  # e * k
+
+            A = tf.einsum('bse,el,lk->bsk', x_co_att, W, y_tran)  # b * s * k
+
+            att = tf.nn.softmax(A, -1)
+            x_co_att = tf.einsum('bsk,ke->bse', att, y)  # b * s * e
+
+        elif opt.co_att_type_xy == 'cos':
+            x_norm = tf.nn.l2_normalize(x_co_att, dim=2)  # b * s * e
+            y_norm_tran = tf.transpose(tf.nn.l2_normalize(y, dim=1), [1, 0])  # e * k
+
+            A = tf.contrib.keras.backend.dot(x_norm, y_norm_tran)  # b * s * c
+
+            att = tf.nn.softmax(A, -1)
+            print('icanseeflag', x_co_att.get_shape(), att.get_shape(), y.get_shape())
+            x_co_att = tf.einsum('bsk,ke->bse', att, y)  # b * s * e
+        elif opt.co_att_type_xy == 'share':
+            W = opt.att_w
+            y_tran = tf.transpose(y, [1, 0])  # e * k
+
+            A = tf.einsum('bse,el,lk->bsk', x_co_att, W, y_tran)  # b * s * k
+
+            att = tf.nn.softmax(A, -1)
+            x_co_att = tf.einsum('bsk,ke->bse', att, y)  # b * s * e
+        elif opt.co_att_type_xy == 'mul':
+            y_tran = tf.transpose(y, [1, 0])  # e * k
+
+            A = tf.contrib.keras.backend.dot(x_co_att, y_tran)  # b * s * c
+
+            att = tf.nn.softmax(A, -1)
+            x_co_att = tf.einsum('bsk,ke->bse', att, y)  # b * s * e
+        else:
+            raise ValueError("Unsupported co-attention method=%s" % opt.co_att_type_xy)
+        x_co_att_multigram.append(x_co_att)
+        x_co_att_score.append(att)
+
+    return x_co_att_multigram, x_co_att_score#tf.reduce_mean(tf.stack(x_co_att_multigram), 0)
+
 def parse_args(argv):
 	parser = ArgumentParser("DeepSensor",
 					formatter_class=ArgumentDefaultsHelpFormatter,
